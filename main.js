@@ -300,6 +300,20 @@ function onPointerUp() {
   wasGrabbed = true;
   document.body.style.cursor = 'default';
 
+  // If model is at or near ground, skip drop and go straight to idle
+  if (model.position.y <= groundedY + 0.15) {
+    model.position.y = groundedY;
+    model.rotation.z = 0;
+    gravityVel = 0;
+    modelVelocity.set(0, 0, 0);
+    dropState = 'grounded';
+    wasGrabbed = false;
+    if (hangAction) hangAction.stop();
+    if (fallIdleAction) fallIdleAction.stop();
+    idleAction && idleAction.reset().fadeIn(0.2).play();
+    return;
+  }
+
   // Throw velocity
   modelVelocity.copy(mouseWorld).sub(prevMouseWorld).multiplyScalar(2);
   gravityVel = modelVelocity.y;
@@ -376,6 +390,7 @@ function updateGrabbed(dt) {
   if (!model || !isGrabbed) return;
 
   const targetPos = mouseWorld.clone().sub(grabOffset);
+  targetPos.y = Math.max(targetPos.y, groundedY);
   model.position.lerp(targetPos, 0.3);
 
   // Swing based on horizontal movement
