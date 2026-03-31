@@ -266,7 +266,7 @@ function onPointerMove(clientX, clientY) {
 }
 
 function onPointerDown(clientX, clientY) {
-  if (!model || introPlaying || isClapping) return;
+  if (!model || introPlaying) return;
   updatePointerWorld(clientX, clientY);
 
   if (isNearModel(mouse)) {
@@ -285,7 +285,10 @@ function onPointerDown(clientX, clientY) {
     if (prayAction) prayAction.stop();
     if (fallAction) fallAction.stop();
     if (fallIdleAction) fallIdleAction.stop();
-    hangAction && hangAction.reset().fadeIn(0.15).play();
+    if (hangAction) {
+      hangAction.timeScale = 5;
+      hangAction.reset().fadeIn(0.15).play();
+    }
   }
 }
 
