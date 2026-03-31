@@ -1,0 +1,17 @@
+# Uncompressed original GLBs (use *-opt.glb versions)
+model.glb
+Breathing Idle.glb
+Hanging Idle.glb
+Falling To Landing.glb
+Falling Idle.glb
+Clapping.glb
+Pointing.glb
+Yelling Out.glb
+Praying.glb
+Talking On A Cell Phone.glb
+
+.DS_Store
+model-white.glb
+yelling-opt.glb
+textures/
+.claude/
