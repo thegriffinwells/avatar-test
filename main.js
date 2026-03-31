@@ -276,6 +276,8 @@ function onPointerDown(clientX, clientY) {
     grabOffset.set(0, 2.2, 0);
     gravityVel = 0;
     modelVelocity.set(0, 0, 0);
+    smoothYaw = 0;
+    smoothPitch = 0;
 
     // Stop all other actions, then play hanging
     if (idleAction) idleAction.stop();
@@ -339,7 +341,7 @@ let smoothYaw = 0;
 let smoothPitch = 0;
 
 function updateHeadTracking() {
-  if (!headBone || isGrabbed || introPlaying) return;
+  if (!headBone || isGrabbed || introPlaying || dropState !== 'grounded' || isClapping) return;
 
   const headWorldPos = new THREE.Vector3();
   headBone.getWorldPosition(headWorldPos);
