@@ -245,17 +245,41 @@ Promise.all([
 });
 
 // ── Gyroscope ───────────────────────────────────────────────
+const _dbg = document.getElementById('gyro-debug');
+const _gyroLog = {
+  DOE: typeof DeviceOrientationEvent,
+  reqPerm: typeof DeviceOrientationEvent !== 'undefined' ? typeof DeviceOrientationEvent.requestPermission : 'n/a',
+  called: false,
+  result: '-',
+  events: 0,
+  gamma: '-',
+};
+
+function _updateDbg() {
+  if (!_dbg) return;
+  _dbg.textContent =
+    `DOE: ${_gyroLog.DOE}\n` +
+    `reqPerm: ${_gyroLog.reqPerm}\n` +
+    `called: ${_gyroLog.called}\n` +
+    `result: ${_gyroLog.result}\n` +
+    `events: ${_gyroLog.events}\n` +
+    `gamma: ${_gyroLog.gamma}\n` +
+    `enabled: ${gyroEnabled}`;
+}
+_updateDbg();
+
 function onDeviceOrientation(e) {
+  _gyroLog.events++;
+  _gyroLog.gamma = e.gamma;
   if (e.gamma !== null) {
     gyroGamma = e.gamma;
     gyroBeta = e.beta;
     gyroEnabled = true;
   }
+  _updateDbg();
 }
 
-// Always listen — on iOS without permission events fire with null values
-// (filtered by gamma !== null check). Once permission is granted the same
-// listener starts receiving real values. No need for a second listener.
+// Always listen
 window.addEventListener('deviceorientation', onDeviceOrientation);
 
 // iOS 13+ requires permission from a user gesture for non-null sensor data
@@ -264,12 +288,18 @@ function requestGyroPermission() {
   if (typeof DeviceOrientationEvent === 'undefined') return;
   if (typeof DeviceOrientationEvent.requestPermission !== 'function') return;
   gyroPermissionRequested = true;
+  _gyroLog.called = true;
+  _updateDbg();
   DeviceOrientationEvent.requestPermission()
     .then(state => {
-      if (state !== 'granted') gyroPermissionRequested = false; // allow retry
+      _gyroLog.result = state;
+      _updateDbg();
+      if (state !== 'granted') gyroPermissionRequested = false;
     })
-    .catch(() => {
-      gyroPermissionRequested = false; // allow retry
+    .catch((err) => {
+      _gyroLog.result = 'ERR: ' + err.message;
+      _updateDbg();
+      gyroPermissionRequested = false;
     });
 }
 
