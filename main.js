@@ -245,62 +245,37 @@ Promise.all([
 });
 
 // ── Gyroscope ───────────────────────────────────────────────
-const _dbg = document.getElementById('gyro-debug');
-const _gyroLog = {
-  DOE: typeof DeviceOrientationEvent,
-  reqPerm: typeof DeviceOrientationEvent !== 'undefined' ? typeof DeviceOrientationEvent.requestPermission : 'n/a',
-  called: false,
-  result: '-',
-  events: 0,
-  gamma: '-',
-};
-
-function _updateDbg() {
-  if (!_dbg) return;
-  _dbg.textContent =
-    `DOE: ${_gyroLog.DOE}\n` +
-    `reqPerm: ${_gyroLog.reqPerm}\n` +
-    `called: ${_gyroLog.called}\n` +
-    `result: ${_gyroLog.result}\n` +
-    `events: ${_gyroLog.events}\n` +
-    `gamma: ${_gyroLog.gamma}\n` +
-    `enabled: ${gyroEnabled}`;
-}
-_updateDbg();
-
 function onDeviceOrientation(e) {
-  _gyroLog.events++;
-  _gyroLog.gamma = e.gamma;
   if (e.gamma !== null) {
     gyroGamma = e.gamma;
     gyroBeta = e.beta;
     gyroEnabled = true;
+    // Hide the permission button once we're getting real data
+    const btn = document.getElementById('gyro-btn');
+    if (btn) btn.style.display = 'none';
   }
-  _updateDbg();
 }
 
-// Always listen
+// Always listen — on iOS without permission, events fire with null gamma
 window.addEventListener('deviceorientation', onDeviceOrientation);
 
-// iOS 13+ requires permission from a user gesture for non-null sensor data
-function requestGyroPermission() {
-  if (gyroPermissionRequested || gyroEnabled) return;
-  if (typeof DeviceOrientationEvent === 'undefined') return;
-  if (typeof DeviceOrientationEvent.requestPermission !== 'function') return;
-  gyroPermissionRequested = true;
-  _gyroLog.called = true;
-  _updateDbg();
-  DeviceOrientationEvent.requestPermission()
-    .then(state => {
-      _gyroLog.result = state;
-      _updateDbg();
-      if (state !== 'granted') gyroPermissionRequested = false;
-    })
-    .catch((err) => {
-      _gyroLog.result = 'ERR: ' + err.message;
-      _updateDbg();
-      gyroPermissionRequested = false;
-    });
+// iOS needs permission via a real HTML button click (touchstart on canvas doesn't count)
+const _gyroBtn = document.getElementById('gyro-btn');
+const _needsGyroPermission = typeof DeviceOrientationEvent !== 'undefined' &&
+  typeof DeviceOrientationEvent.requestPermission === 'function';
+
+if (_needsGyroPermission && _gyroBtn) {
+  // Show the button after first grab (handled in updateHint)
+  _gyroBtn.addEventListener('click', () => {
+    DeviceOrientationEvent.requestPermission()
+      .then(state => {
+        _gyroBtn.style.display = 'none';
+        if (state === 'granted') gyroEnabled = true;
+      })
+      .catch(() => {
+        _gyroBtn.textContent = 'Permission denied — check Safari settings';
+      });
+  });
 }
 
 // ── Hit detection via screen-space distance ──────────────────
@@ -386,8 +361,6 @@ window.addEventListener('mouseup', onPointerUp);
 
 // Touch events — don't prevent default on buttons
 renderer.domElement.addEventListener('touchstart', (e) => {
-  // Request gyro permission BEFORE preventDefault — strongest iOS user-gesture context
-  requestGyroPermission();
   e.preventDefault();
   const t = e.touches[0];
   onPointerMove(t.clientX, t.clientY);
@@ -634,8 +607,8 @@ function triggerButtonAnim(btnId, palette) {
 
 document.querySelectorAll('.corner-btn').forEach((btn) => {
   const palette = CONFETTI_PALETTES[btn.id];
-  btn.addEventListener('click', () => { requestGyroPermission(); triggerButtonAnim(btn.id, palette); });
-  btn.addEventListener('touchstart', () => { requestGyroPermission(); btn.classList.add('tapped'); }, { passive: true });
+  btn.addEventListener('click', () => triggerButtonAnim(btn.id, palette));
+  btn.addEventListener('touchstart', () => btn.classList.add('tapped'), { passive: true });
   btn.addEventListener('touchend', () => {
     triggerButtonAnim(btn.id, palette);
     setTimeout(() => btn.classList.remove('tapped'), 150);
@@ -735,9 +708,14 @@ function updateHint() {
   if (!model || !hintEl) return;
 
   const showGrab = !introPlaying && !hasGrabbed && dropState === 'grounded';
-  const showTilt = hasTouch && hasGrabbed && !hasTilted && dropState === 'grounded' && !isGrabbed && !isClapping;
+  const showTilt = hasTouch && hasGrabbed && !hasTilted && !gyroEnabled && dropState === 'grounded' && !isGrabbed && !isClapping;
 
-  if (showGrab || showTilt) {
+  // Show the gyro permission button when it's time for "Tilt Me" on iOS
+  if (_needsGyroPermission && _gyroBtn) {
+    _gyroBtn.style.display = (showTilt && !gyroEnabled) ? 'block' : 'none';
+  }
+
+  if (showGrab || (showTilt && !_needsGyroPermission)) {
     const pos = new THREE.Vector3(model.position.x, model.position.y + 2.05, model.position.z);
     pos.project(camera);
     hintEl.style.left = ((pos.x * 0.5 + 0.5) * innerWidth) + 'px';
