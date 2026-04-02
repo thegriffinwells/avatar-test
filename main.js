@@ -253,32 +253,24 @@ function onDeviceOrientation(e) {
   }
 }
 
-// iOS 13+ requires explicit permission from a user gesture.
-// IMPORTANT: do NOT add an eager listener on iOS — doing so before
-// requestPermission() can permanently block orientation events.
-const _needsGyroPermission = typeof DeviceOrientationEvent !== 'undefined' &&
-  typeof DeviceOrientationEvent.requestPermission === 'function';
+// Always listen — on iOS without permission events fire with null values
+// (filtered by gamma !== null check). Once permission is granted the same
+// listener starts receiving real values. No need for a second listener.
+window.addEventListener('deviceorientation', onDeviceOrientation);
 
-if (!_needsGyroPermission) {
-  // Android / desktop — just listen, no permission needed
-  window.addEventListener('deviceorientation', onDeviceOrientation);
-}
-
+// iOS 13+ requires permission from a user gesture for non-null sensor data
 function requestGyroPermission() {
   if (gyroPermissionRequested || gyroEnabled) return;
+  if (typeof DeviceOrientationEvent === 'undefined') return;
+  if (typeof DeviceOrientationEvent.requestPermission !== 'function') return;
   gyroPermissionRequested = true;
-  if (_needsGyroPermission) {
-    DeviceOrientationEvent.requestPermission()
-      .then(state => {
-        if (state === 'granted') {
-          window.addEventListener('deviceorientation', onDeviceOrientation);
-        }
-      })
-      .catch(() => {
-        // Permission failed (weak user-gesture context?) — allow retry on next touch
-        gyroPermissionRequested = false;
-      });
-  }
+  DeviceOrientationEvent.requestPermission()
+    .then(state => {
+      if (state !== 'granted') gyroPermissionRequested = false; // allow retry
+    })
+    .catch(() => {
+      gyroPermissionRequested = false; // allow retry
+    });
 }
 
 // ── Hit detection via screen-space distance ──────────────────
@@ -364,9 +356,9 @@ window.addEventListener('mouseup', onPointerUp);
 
 // Touch events — don't prevent default on buttons
 renderer.domElement.addEventListener('touchstart', (e) => {
-  e.preventDefault();
-  // Request gyro permission from direct touch handler (strongest iOS user-gesture context)
+  // Request gyro permission BEFORE preventDefault — strongest iOS user-gesture context
   requestGyroPermission();
+  e.preventDefault();
   const t = e.touches[0];
   onPointerMove(t.clientX, t.clientY);
   onPointerDown(t.clientX, t.clientY);
@@ -612,8 +604,8 @@ function triggerButtonAnim(btnId, palette) {
 
 document.querySelectorAll('.corner-btn').forEach((btn) => {
   const palette = CONFETTI_PALETTES[btn.id];
-  btn.addEventListener('click', () => triggerButtonAnim(btn.id, palette));
-  btn.addEventListener('touchstart', () => btn.classList.add('tapped'), { passive: true });
+  btn.addEventListener('click', () => { requestGyroPermission(); triggerButtonAnim(btn.id, palette); });
+  btn.addEventListener('touchstart', () => { requestGyroPermission(); btn.classList.add('tapped'); }, { passive: true });
   btn.addEventListener('touchend', () => {
     triggerButtonAnim(btn.id, palette);
     setTimeout(() => btn.classList.remove('tapped'), 150);
