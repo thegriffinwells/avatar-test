@@ -7,6 +7,7 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87CEEB);
 
 const isMobile = innerWidth < 768;
+const hasTouch = 'ontouchstart' in window;
 const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 100);
 camera.position.set(0, isMobile ? 1.6 : 1.2, isMobile ? 5.5 : 4);
 camera.lookAt(0, isMobile ? 1.5 : 1.0, 0);
@@ -252,15 +253,21 @@ function onDeviceOrientation(e) {
   }
 }
 
-// Listen eagerly — works immediately on Android / desktop (no permission needed)
-window.addEventListener('deviceorientation', onDeviceOrientation);
+// iOS 13+ requires explicit permission from a user gesture.
+// IMPORTANT: do NOT add an eager listener on iOS — doing so before
+// requestPermission() can permanently block orientation events.
+const _needsGyroPermission = typeof DeviceOrientationEvent !== 'undefined' &&
+  typeof DeviceOrientationEvent.requestPermission === 'function';
 
-// iOS 13+ requires explicit permission from a user gesture
+if (!_needsGyroPermission) {
+  // Android / desktop — just listen, no permission needed
+  window.addEventListener('deviceorientation', onDeviceOrientation);
+}
+
 function requestGyroPermission() {
   if (gyroPermissionRequested) return;
   gyroPermissionRequested = true;
-  if (typeof DeviceOrientationEvent !== 'undefined' &&
-      typeof DeviceOrientationEvent.requestPermission === 'function') {
+  if (_needsGyroPermission) {
     DeviceOrientationEvent.requestPermission()
       .then(state => {
         if (state === 'granted') {
@@ -272,7 +279,9 @@ function requestGyroPermission() {
 }
 
 // Request iOS permission on first touch anywhere on the page
-window.addEventListener('touchstart', () => requestGyroPermission(), { once: true });
+if (_needsGyroPermission) {
+  window.addEventListener('touchstart', () => requestGyroPermission(), { once: true });
+}
 
 // ── Hit detection via screen-space distance ──────────────────
 function isNearModel(ndc) {
@@ -374,41 +383,38 @@ renderer.domElement.addEventListener('touchend', (e) => {
   onPointerUp();
 }, { passive: false });
 
-// ── Head look-at (idle only) ─────────────────────────────────
+// ── Head look-at (grounded idle only) ────────────────────────
 const _headTargetQuat = new THREE.Quaternion();
 const _headEuler = new THREE.Euler();
-// Smoothed target values for head tracking
+const _headAnimQuat = new THREE.Quaternion();
+const _neckAnimQuat = new THREE.Quaternion();
 let smoothYaw = 0;
 let smoothPitch = 0;
 
 function updateHeadTracking() {
-  if (!headBone || isGrabbed || introPlaying) return;
+  // Only track when standing idle — not during fall, land, grab, or button anims
+  if (!headBone || isGrabbed || introPlaying || dropState !== 'grounded' || isClapping) return;
 
   const headWorldPos = new THREE.Vector3();
   headBone.getWorldPosition(headWorldPos);
   const dir = mouseWorld.clone().sub(headWorldPos).normalize();
 
-  // Compute target angles
   const targetYaw = THREE.MathUtils.clamp(Math.atan2(dir.x, dir.z), -0.4, 0.4);
   const targetPitch = THREE.MathUtils.clamp(-Math.asin(THREE.MathUtils.clamp(dir.y, -0.3, 0.3)), -0.2, 0.2);
 
-  // Smooth toward target
   smoothYaw += (targetYaw - smoothYaw) * 0.08;
   smoothPitch += (targetPitch - smoothPitch) * 0.08;
 
-  // Build target quaternion and multiply on top of animation pose
-  // The animation has already set headBone.quaternion, so we compose on top
   _headEuler.set(smoothPitch, smoothYaw, 0, 'YXZ');
   _headTargetQuat.setFromEuler(_headEuler);
 
-  // Multiply the look rotation on top of the current animation rotation
-  headBone.quaternion.multiply(_headTargetQuat);
+  // Apply on top of saved animation quaternion — prevents accumulation
+  headBone.quaternion.copy(_headAnimQuat).multiply(_headTargetQuat);
 
-  // Also slightly rotate neck for more natural look
   if (neckBone) {
     _headEuler.set(smoothPitch * 0.3, smoothYaw * 0.4, 0, 'YXZ');
     _headTargetQuat.setFromEuler(_headEuler);
-    neckBone.quaternion.multiply(_headTargetQuat);
+    neckBone.quaternion.copy(_neckAnimQuat).multiply(_headTargetQuat);
   }
 }
 
@@ -513,11 +519,13 @@ function updateDropped(dt) {
     model.position.y = groundedY;
     if (gyroEnabled) {
       const tiltFraction = smoothGamma / 90;
+      // Lean proportional to tilt
       model.rotation.z = THREE.MathUtils.lerp(model.rotation.z, -tiltFraction * 0.8, 0.12);
-      model.position.x = THREE.MathUtils.lerp(model.position.x, tiltFraction * 3.0, 0.06);
+      // Slide like gravity — velocity, not position snap
+      model.position.x += tiltFraction * 4 * dt;
+      model.position.x = THREE.MathUtils.clamp(model.position.x, -4, 4);
     } else {
       model.rotation.z = THREE.MathUtils.lerp(model.rotation.z, 0, 0.08);
-      model.position.x = THREE.MathUtils.lerp(model.position.x, 0, 0.025);
     }
   }
 }
@@ -705,7 +713,7 @@ function updateHint() {
   if (!model || !hintEl) return;
 
   const showGrab = !introPlaying && !hasGrabbed && dropState === 'grounded';
-  const showTilt = isMobile && hasGrabbed && !hasTilted && dropState === 'grounded' && !isGrabbed && !isClapping;
+  const showTilt = hasTouch && hasGrabbed && !hasTilted && dropState === 'grounded' && !isGrabbed && !isClapping;
 
   if (showGrab || showTilt) {
     const pos = new THREE.Vector3(model.position.x, model.position.y + 2.05, model.position.z);
@@ -733,6 +741,10 @@ function animate() {
   const dt = Math.min(clock.getDelta(), 0.05);
 
   if (mixer) mixer.update(dt);
+
+  // Save post-animation bone rotations before head tracking modifies them
+  if (headBone) _headAnimQuat.copy(headBone.quaternion);
+  if (neckBone) _neckAnimQuat.copy(neckBone.quaternion);
 
   updateGyro(dt);
   updateHint();
