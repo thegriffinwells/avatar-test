@@ -265,7 +265,7 @@ if (!_needsGyroPermission) {
 }
 
 function requestGyroPermission() {
-  if (gyroPermissionRequested) return;
+  if (gyroPermissionRequested || gyroEnabled) return;
   gyroPermissionRequested = true;
   if (_needsGyroPermission) {
     DeviceOrientationEvent.requestPermission()
@@ -274,13 +274,11 @@ function requestGyroPermission() {
           window.addEventListener('deviceorientation', onDeviceOrientation);
         }
       })
-      .catch(console.error);
+      .catch(() => {
+        // Permission failed (weak user-gesture context?) — allow retry on next touch
+        gyroPermissionRequested = false;
+      });
   }
-}
-
-// Request iOS permission on first touch anywhere on the page
-if (_needsGyroPermission) {
-  window.addEventListener('touchstart', () => requestGyroPermission(), { once: true });
 }
 
 // ── Hit detection via screen-space distance ──────────────────
@@ -367,6 +365,8 @@ window.addEventListener('mouseup', onPointerUp);
 // Touch events — don't prevent default on buttons
 renderer.domElement.addEventListener('touchstart', (e) => {
   e.preventDefault();
+  // Request gyro permission from direct touch handler (strongest iOS user-gesture context)
+  requestGyroPermission();
   const t = e.touches[0];
   onPointerMove(t.clientX, t.clientY);
   onPointerDown(t.clientX, t.clientY);
@@ -425,6 +425,9 @@ function updateGrabbed(dt) {
   const targetPos = mouseWorld.clone().sub(grabOffset);
   model.position.lerp(targetPos, 0.3);
 
+  // Don't let model clip through floor while grabbed
+  if (model.position.y < groundedY) model.position.y = groundedY;
+
   // Swing based on horizontal movement
   const moveDelta = mouseWorld.clone().sub(prevMouseWorld);
   const swingAngle = THREE.MathUtils.clamp(-moveDelta.x * 4, -0.6, 0.6);
@@ -464,14 +467,11 @@ function updateDropped(dt) {
     modelVelocity.set(0, 0, 0);
     model.rotation.z = 0;
     dropState = 'grounded';
-    if (fallIdleAction) fallIdleAction.stop();
-    if (hangAction) hangAction.stop();
-    if (fallAction) fallAction.stop();
+    // Hard-cut to idle — no fade prevents T-pose when all actions have zero weight
+    mixer.stopAllAction();
+    if (idleAction) idleAction.reset().play();
     introPlaying = false;
     wasGrabbed = false;
-    if (!idleAction || idleAction.getEffectiveWeight() < 0.5) {
-      idleAction && idleAction.reset().fadeIn(0.3).play();
-    }
     return;
   }
 
