@@ -81,6 +81,10 @@ let gravityVel = 0;
 const GROUND_Y = 0;
 let groundedY = 0; // computed after model loads
 let swingVel = 0; // pendulum angular velocity while grabbed
+let legSwingAngle = 0;
+let hipsBone, spineBone;
+const _hipsAnimQuat = new THREE.Quaternion();
+const _spineAnimQuat = new THREE.Quaternion();
 
 // Compute visible world-space half-width at z=0 for screen edge clamping
 function getMaxDriftX() {
@@ -249,6 +253,8 @@ Promise.all([
     const name = child.name.toLowerCase();
     if (name.includes('head') && !name.includes('headtop') && !headBone) headBone = child;
     if (name.includes('neck') && !neckBone) neckBone = child;
+    if (name.endsWith('hips') && !hipsBone) hipsBone = child;
+    if (name.endsWith('spine') && !spineBone) spineBone = child;
   });
 
   document.getElementById('loading').classList.add('hidden');
@@ -343,6 +349,7 @@ function onPointerDown(clientX, clientY) {
     if (fallAction) fallAction.stop();
     if (fallIdleAction) fallIdleAction.stop();
     swingVel = 0;
+    legSwingAngle = 0;
     if (hangAction) {
       hangAction.timeScale = 1.5;
       hangAction.reset().fadeIn(0.15).play();
@@ -424,7 +431,7 @@ function updateHeadTracking() {
   }
 }
 
-// ── Grabbed: follow cursor with pendulum swing ──────────────
+// ── Grabbed: follow cursor, pendulum legs ───────────────────
 function updateGrabbed(dt) {
   if (!model || !isGrabbed) return;
 
@@ -435,14 +442,33 @@ function updateGrabbed(dt) {
   // Don't let model clip through floor while grabbed
   if (model.position.y < groundedY) model.position.y = groundedY;
 
-  // Pendulum physics — horizontal acceleration swings the body,
-  // gravity pulls it back to vertical, damping settles it
+  // Pendulum physics drives leg swing (not whole-body rotation)
   const moveAccel = (model.position.x - prevX) / Math.max(dt, 0.001);
-  swingVel -= moveAccel * 0.15;                       // movement tilts body
-  swingVel -= 8 * Math.sin(model.rotation.z) * dt;    // gravity restores
-  swingVel *= 0.96;                                    // damping
-  model.rotation.z += swingVel * dt;
-  model.rotation.z = THREE.MathUtils.clamp(model.rotation.z, -1.2, 1.2);
+  swingVel -= moveAccel * 0.06;                          // drag momentum
+  if (gyroEnabled) swingVel += (smoothGamma / 90) * 2 * dt; // phone tilt
+  swingVel -= 6 * Math.sin(legSwingAngle) * dt;          // gravity restores
+  swingVel *= 0.94;                                       // damping
+  legSwingAngle += swingVel * dt;
+  legSwingAngle = THREE.MathUtils.clamp(legSwingAngle, -0.4, 0.4);
+
+  // Keep model upright — swing is applied to bones, not the whole model
+  model.rotation.z = THREE.MathUtils.lerp(model.rotation.z, 0, 0.15);
+}
+
+// Apply leg swing to hips bone, counter-rotate spine so only legs move
+const _swingQuat = new THREE.Quaternion();
+const _counterQuat = new THREE.Quaternion();
+const _zAxis = new THREE.Vector3(0, 0, 1);
+
+function applyLegSwing() {
+  if (!isGrabbed || !hipsBone || !spineBone) return;
+
+  _swingQuat.setFromAxisAngle(_zAxis, legSwingAngle);
+  _counterQuat.setFromAxisAngle(_zAxis, -legSwingAngle);
+
+  // Rotate hips (affects legs + spine), then undo rotation on spine (keeps upper body still)
+  hipsBone.quaternion.copy(_hipsAnimQuat).premultiply(_swingQuat);
+  spineBone.quaternion.copy(_spineAnimQuat).premultiply(_counterQuat);
 }
 
 // ── Drop system (rewritten from scratch) ─────────────────────
@@ -768,14 +794,17 @@ function animate() {
 
   if (mixer) mixer.update(dt);
 
-  // Save post-animation bone rotations before head tracking modifies them
+  // Save post-animation bone rotations before we modify them
   if (headBone) _headAnimQuat.copy(headBone.quaternion);
   if (neckBone) _neckAnimQuat.copy(neckBone.quaternion);
+  if (hipsBone) _hipsAnimQuat.copy(hipsBone.quaternion);
+  if (spineBone) _spineAnimQuat.copy(spineBone.quaternion);
 
   updateGyro(dt);
   updateHint();
   updateHeadTracking();
   updateGrabbed(dt);
+  applyLegSwing();
   updateDropped(dt);
   updateConfetti(dt);
 
