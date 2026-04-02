@@ -80,6 +80,15 @@ let gravityVel = 0;
 const GROUND_Y = 0;
 let groundedY = 0; // computed after model loads
 
+// ── Gyroscope & hints ───────────────────────────────────────
+let gyroGamma = 0, gyroBeta = 0;
+let smoothGamma = 0;
+let gyroEnabled = false;
+let gyroPermissionRequested = false;
+let hasGrabbed = false;
+let hasTilted = false;
+const hintEl = document.getElementById('hint');
+
 // ── Tunable drop parameters ──────────────────────────────────
 const dropConfig = {
   gravity: 6,
@@ -234,6 +243,32 @@ Promise.all([
   document.getElementById('loading').classList.add('hidden');
 });
 
+// ── Gyroscope ───────────────────────────────────────────────
+function onDeviceOrientation(e) {
+  if (e.gamma !== null) {
+    gyroGamma = e.gamma;
+    gyroBeta = e.beta;
+    gyroEnabled = true;
+  }
+}
+
+function requestGyroPermission() {
+  if (gyroPermissionRequested) return;
+  gyroPermissionRequested = true;
+  if (typeof DeviceOrientationEvent !== 'undefined' &&
+      typeof DeviceOrientationEvent.requestPermission === 'function') {
+    DeviceOrientationEvent.requestPermission()
+      .then(state => {
+        if (state === 'granted') {
+          window.addEventListener('deviceorientation', onDeviceOrientation);
+        }
+      })
+      .catch(console.error);
+  } else {
+    window.addEventListener('deviceorientation', onDeviceOrientation);
+  }
+}
+
 // ── Hit detection via screen-space distance ──────────────────
 function isNearModel(ndc) {
   if (!model) return false;
@@ -272,6 +307,10 @@ function onPointerDown(clientX, clientY) {
   if (isNearModel(mouse)) {
     isGrabbed = true;
     document.body.style.cursor = 'grabbing';
+    if (!hasGrabbed) {
+      hasGrabbed = true;
+      if (isMobile) requestGyroPermission();
+    }
     // Offset so hands (raised above head) align with cursor
     grabOffset.set(0, 2.2, 0);
     gravityVel = 0;
@@ -468,8 +507,14 @@ function updateDropped(dt) {
 
   if (dropState === 'grounded') {
     model.position.y = groundedY;
-    model.rotation.z = THREE.MathUtils.lerp(model.rotation.z, 0, 0.08);
-    model.position.x = THREE.MathUtils.lerp(model.position.x, 0, 0.025);
+    if (gyroEnabled) {
+      const tiltFraction = smoothGamma / 90;
+      model.rotation.z = THREE.MathUtils.lerp(model.rotation.z, -tiltFraction * 0.6, 0.08);
+      model.position.x = THREE.MathUtils.lerp(model.position.x, tiltFraction * 2.5, 0.04);
+    } else {
+      model.rotation.z = THREE.MathUtils.lerp(model.rotation.z, 0, 0.08);
+      model.position.x = THREE.MathUtils.lerp(model.position.x, 0, 0.025);
+    }
   }
 }
 
@@ -642,6 +687,40 @@ window.addEventListener('resize', () => {
   resizeTrail();
 });
 
+// ── Gyro smoothing ──────────────────────────────────────────
+function updateGyro(dt) {
+  if (!gyroEnabled) return;
+  smoothGamma = THREE.MathUtils.lerp(smoothGamma, gyroGamma, 0.1);
+  if (!hasTilted && Math.abs(gyroGamma) > 12) {
+    hasTilted = true;
+  }
+}
+
+// ── Hint text above head ────────────────────────────────────
+function updateHint() {
+  if (!model || !hintEl) return;
+
+  const showGrab = !introPlaying && !hasGrabbed && dropState === 'grounded';
+  const showTilt = isMobile && hasGrabbed && !hasTilted && dropState === 'grounded' && !isGrabbed && !isClapping;
+
+  if (showGrab || showTilt) {
+    const pos = new THREE.Vector3(model.position.x, model.position.y + 2.05, model.position.z);
+    pos.project(camera);
+    hintEl.style.left = ((pos.x * 0.5 + 0.5) * innerWidth) + 'px';
+    hintEl.style.top = ((-pos.y * 0.5 + 0.5) * innerHeight) + 'px';
+
+    if (showGrab) {
+      hintEl.textContent = 'Grab Me';
+      hintEl.className = 'hint pulse-slow';
+    } else {
+      hintEl.textContent = 'Tilt Me';
+      hintEl.className = 'hint pulse-fast';
+    }
+  } else {
+    hintEl.className = 'hint';
+  }
+}
+
 // ── Animation loop ───────────────────────────────────────────
 const clock = new THREE.Clock();
 
@@ -651,6 +730,8 @@ function animate() {
 
   if (mixer) mixer.update(dt);
 
+  updateGyro(dt);
+  updateHint();
   updateHeadTracking();
   updateGrabbed(dt);
   updateDropped(dt);
