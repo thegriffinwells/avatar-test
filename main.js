@@ -252,6 +252,10 @@ function onDeviceOrientation(e) {
   }
 }
 
+// Listen eagerly — works immediately on Android / desktop (no permission needed)
+window.addEventListener('deviceorientation', onDeviceOrientation);
+
+// iOS 13+ requires explicit permission from a user gesture
 function requestGyroPermission() {
   if (gyroPermissionRequested) return;
   gyroPermissionRequested = true;
@@ -264,10 +268,11 @@ function requestGyroPermission() {
         }
       })
       .catch(console.error);
-  } else {
-    window.addEventListener('deviceorientation', onDeviceOrientation);
   }
 }
+
+// Request iOS permission on first touch anywhere on the page
+window.addEventListener('touchstart', () => requestGyroPermission(), { once: true });
 
 // ── Hit detection via screen-space distance ──────────────────
 function isNearModel(ndc) {
@@ -309,7 +314,6 @@ function onPointerDown(clientX, clientY) {
     document.body.style.cursor = 'grabbing';
     if (!hasGrabbed) {
       hasGrabbed = true;
-      if (isMobile) requestGyroPermission();
     }
     // Offset so hands (raised above head) align with cursor
     grabOffset.set(0, 2.2, 0);
@@ -509,8 +513,8 @@ function updateDropped(dt) {
     model.position.y = groundedY;
     if (gyroEnabled) {
       const tiltFraction = smoothGamma / 90;
-      model.rotation.z = THREE.MathUtils.lerp(model.rotation.z, -tiltFraction * 0.6, 0.08);
-      model.position.x = THREE.MathUtils.lerp(model.position.x, tiltFraction * 2.5, 0.04);
+      model.rotation.z = THREE.MathUtils.lerp(model.rotation.z, -tiltFraction * 0.8, 0.12);
+      model.position.x = THREE.MathUtils.lerp(model.position.x, tiltFraction * 3.0, 0.06);
     } else {
       model.rotation.z = THREE.MathUtils.lerp(model.rotation.z, 0, 0.08);
       model.position.x = THREE.MathUtils.lerp(model.position.x, 0, 0.025);
