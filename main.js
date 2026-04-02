@@ -80,6 +80,16 @@ const modelVelocity = new THREE.Vector3();
 let gravityVel = 0;
 const GROUND_Y = 0;
 let groundedY = 0; // computed after model loads
+let swingVel = 0; // pendulum angular velocity while grabbed
+
+// Compute visible world-space half-width at z=0 for screen edge clamping
+function getMaxDriftX() {
+  const vFov = camera.fov * Math.PI / 180;
+  const dist = camera.position.z;
+  const visibleHeight = 2 * Math.tan(vFov / 2) * dist;
+  return (visibleHeight * camera.aspect) / 2 - 0.4;
+}
+let maxDriftX = getMaxDriftX();
 
 // ── Gyroscope & hints ───────────────────────────────────────
 let gyroGamma = 0, gyroBeta = 0;
@@ -332,8 +342,9 @@ function onPointerDown(clientX, clientY) {
     if (prayAction) prayAction.stop();
     if (fallAction) fallAction.stop();
     if (fallIdleAction) fallIdleAction.stop();
+    swingVel = 0;
     if (hangAction) {
-      hangAction.timeScale = 5;
+      hangAction.timeScale = 1.5;
       hangAction.reset().fadeIn(0.15).play();
     }
   }
@@ -413,20 +424,25 @@ function updateHeadTracking() {
   }
 }
 
-// ── Grabbed: follow cursor with swing ────────────────────────
+// ── Grabbed: follow cursor with pendulum swing ──────────────
 function updateGrabbed(dt) {
   if (!model || !isGrabbed) return;
 
+  const prevX = model.position.x;
   const targetPos = mouseWorld.clone().sub(grabOffset);
   model.position.lerp(targetPos, 0.3);
 
   // Don't let model clip through floor while grabbed
   if (model.position.y < groundedY) model.position.y = groundedY;
 
-  // Swing based on horizontal movement
-  const moveDelta = mouseWorld.clone().sub(prevMouseWorld);
-  const swingAngle = THREE.MathUtils.clamp(-moveDelta.x * 4, -0.6, 0.6);
-  model.rotation.z = THREE.MathUtils.lerp(model.rotation.z, swingAngle, 0.12);
+  // Pendulum physics — horizontal acceleration swings the body,
+  // gravity pulls it back to vertical, damping settles it
+  const moveAccel = (model.position.x - prevX) / Math.max(dt, 0.001);
+  swingVel -= moveAccel * 0.15;                       // movement tilts body
+  swingVel -= 8 * Math.sin(model.rotation.z) * dt;    // gravity restores
+  swingVel *= 0.96;                                    // damping
+  model.rotation.z += swingVel * dt;
+  model.rotation.z = THREE.MathUtils.clamp(model.rotation.z, -1.2, 1.2);
 }
 
 // ── Drop system (rewritten from scratch) ─────────────────────
@@ -480,6 +496,7 @@ function updateDropped(dt) {
     if (!introPlaying) {
       model.position.x += modelVelocity.x * dt;
       modelVelocity.x *= 0.95;
+      model.position.x = THREE.MathUtils.clamp(model.position.x, -maxDriftX, maxDriftX);
     }
 
     // Check if we should trigger landing animation
@@ -518,7 +535,7 @@ function updateDropped(dt) {
       model.rotation.z = THREE.MathUtils.lerp(model.rotation.z, -tiltFraction * 0.8, 0.12);
       // Slide like gravity — velocity, not position snap
       model.position.x += tiltFraction * 4 * dt;
-      model.position.x = THREE.MathUtils.clamp(model.position.x, -4, 4);
+      model.position.x = THREE.MathUtils.clamp(model.position.x, -maxDriftX, maxDriftX);
     } else {
       model.rotation.z = THREE.MathUtils.lerp(model.rotation.z, 0, 0.08);
     }
@@ -691,6 +708,7 @@ window.addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  maxDriftX = getMaxDriftX();
   resizeTrail();
 });
 
@@ -710,9 +728,17 @@ function updateHint() {
   const showGrab = !introPlaying && !hasGrabbed && dropState === 'grounded';
   const showTilt = hasTouch && hasGrabbed && !hasTilted && !gyroEnabled && dropState === 'grounded' && !isGrabbed && !isClapping;
 
-  // Show the gyro permission button when it's time for "Tilt Me" on iOS
+  // Show the gyro permission button above head when it's time for "Tilt Me" on iOS
   if (_needsGyroPermission && _gyroBtn) {
-    _gyroBtn.style.display = (showTilt && !gyroEnabled) ? 'block' : 'none';
+    if (showTilt && !gyroEnabled) {
+      const btnPos = new THREE.Vector3(model.position.x, model.position.y + 2.15, model.position.z);
+      btnPos.project(camera);
+      _gyroBtn.style.display = 'block';
+      _gyroBtn.style.left = ((btnPos.x * 0.5 + 0.5) * innerWidth) + 'px';
+      _gyroBtn.style.top = ((-btnPos.y * 0.5 + 0.5) * innerHeight) + 'px';
+    } else {
+      _gyroBtn.style.display = 'none';
+    }
   }
 
   if (showGrab || (showTilt && !_needsGyroPermission)) {
